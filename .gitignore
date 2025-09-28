@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.DS_Store
+
+# Streamlit
+.streamlit/
+
+# VS Code / PyCharm
+.vscode/
+.idea/
+
+# OS
+Thumbs.db

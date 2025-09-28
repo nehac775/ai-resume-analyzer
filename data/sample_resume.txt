@@ -1,0 +1,19 @@
+John Doe
+Email: john@example.com | GitHub: github.com/johndoe | LinkedIn: linkedin.com/in/johndoe
+
+SUMMARY
+Second-year CS student with experience in Python, data analysis, and web development.
+Built projects using Flask, pandas, and scikit-learn.
+
+SKILLS
+Python, Java, SQL, Flask, FastAPI, pandas, numpy, scikit-learn, Git, Docker, Linux
+
+PROJECTS
+GitHub Repo Analyzer — Streamlit dashboard that visualizes commit patterns using the GitHub API.
+Pathfinding Visualizer — Implemented BFS, DFS, Dijkstra, and A* using pygame.
+
+EXPERIENCE
+Teaching Assistant, Data Structures — Helped students implement algorithms in Python.
+
+EDUCATION
+B.S. in Computer Science (2026 expected)

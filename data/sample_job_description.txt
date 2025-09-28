@@ -1,0 +1,4 @@
+Software Engineering Intern (Summer)
+We are seeking a Software Engineering Intern with experience in Python, REST APIs, and SQL.
+Familiarity with cloud (AWS or GCP), Docker, and CI/CD is a plus. Knowledge of data analysis
+libraries like pandas or numpy is helpful. Exposure to scikit-learn, Flask or FastAPI preferred.
