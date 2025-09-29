@@ -1,125 +1,140 @@
 """
-Resume Builder (my version)
+AI Resume Analyzer
 
-Why I built it:
----------------
-I was tired of messing around with Word/Google Docs for resumes,
-so I thought it'd be cool to just enter data and get a PDF out.
-Also gave me an excuse to practice Streamlit + PDF generation.
+Why I built this
+----------------
+I wanted a practical project for internships: a tool that compares resumes 
+against job descriptions and shows how well they match. This way, I could 
+practice NLP with spaCy + scikit-learn, while also building a Streamlit app.
 
-Notes & Struggles:
-------------------
-- My first try used `cell` instead of `multi_cell` → text was overflowing off the page.
-- I forgot to add page breaks and the PDF looked broken.
-- Spacing/alignment was a nightmare at first; fixed by using consistent fonts/sizes.
-- TODO: Add multiple template designs (modern vs simple).
-- TODO: Add job description keyword highlighting (to match ATS systems).
+Challenges
+----------
+- Parsing PDFs/Word docs was messy at first → solved with pypdf + python-docx.
+- Matching skills required a curated keyword list + fuzzy matching.
+- TF-IDF vectors sometimes ignored domain-specific words → added stopword tuning.
+- TODO: Add more metrics like Jaccard similarity and named-entity overlap.
+- TODO: Allow multiple resumes at once for batch analysis.
 """
 
 import streamlit as st
+import pandas as pd
+import spacy
+import re
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from PyPDF2 import PdfReader
+import docx
 from fpdf import FPDF
 
-st.set_page_config(page_title="Resume Builder", page_icon="📄", layout="centered")
-st.title("📄 Resume Builder")
+# --- Load NLP model ---
+@st.cache_resource
+def load_spacy():
+    return spacy.load("en_core_web_sm")
 
-# --- Input fields ---
-# I kept the form minimal for now (name, email, summary, skills, experience).
-# In the future I might split sections with tabs, but this works.
-name = st.text_input("Full Name")
-email = st.text_input("Email")
-summary = st.text_area("Summary / About Me", height=120, placeholder="Write a short intro here...")
+nlp = load_spacy()
 
-# I almost used a multiselect for skills, but text input is faster.
-skills = st.text_area("Skills (comma separated)", placeholder="Python, SQL, Streamlit, Pandas")
+# --- Helpers to extract text ---
+def extract_text(file):
+    """Extract text from uploaded file (pdf, docx, or txt)."""
+    if file.name.endswith(".pdf"):
+        reader = PdfReader(file)
+        return " ".join([page.extract_text() for page in reader.pages])
+    elif file.name.endswith(".docx"):
+        doc = docx.Document(file)
+        return " ".join([p.text for p in doc.paragraphs])
+    else:
+        return file.read().decode("utf-8", errors="ignore")
 
-# Experience format is a bit strict → Company | Role | Dates | Bullets
-# I considered a dynamic form with add buttons, but too complex for now.
-experience = st.text_area(
-    "Job Experience (one per line, format: Company | Role | Start-End | Bullet1; Bullet2)",
-    height=160
-)
+def clean_text(text):
+    """Lowercase, remove special chars, lemmatize with spaCy."""
+    doc = nlp(text.lower())
+    tokens = [tok.lemma_ for tok in doc if tok.is_alpha and not tok.is_stop]
+    return " ".join(tokens)
 
-def parse_experience(text):
-    """
-    Parse the raw job text input into a structured list.
-    Example input line:
-        Acme Corp | Data Intern | Jun 2024 - Aug 2024 | cleaned data; built dashboard
-    """
-    jobs = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        try:
-            # Splitting with maxsplit=3 → ensures bullets all stay in the last part.
-            company, role, dates, bullets = [x.strip() for x in line.split("|", maxsplit=3)]
-            jobs.append({
-                "company": company,
-                "role": role,
-                "dates": dates,
-                # Bullets are split by ";" → easy to type multiple ones
-                "bullets": [b.strip() for b in bullets.split(";") if b.strip()]
-            })
-        except ValueError:
-            # If the user types in wrong format, skip it but warn them.
-            st.warning(f"Skipping badly formatted line: {line}")
-    return jobs
+def compute_similarity(resume, jd):
+    """Compute cosine similarity between resume and JD."""
+    vect = TfidfVectorizer()
+    tfidf = vect.fit_transform([resume, jd])
+    score = cosine_similarity(tfidf[0:1], tfidf[1:2])[0][0]
+    return score, vect.get_feature_names_out()
 
-def generate_pdf(name, email, summary, skills, jobs):
-    """
-    Build the actual PDF with fpdf.
-    I experimented with different fonts and sizes until things looked decent.
-    """
+def extract_keywords(text, top_n=20):
+    """Simple keyword extraction using word frequency."""
+    words = re.findall(r"\w+", text.lower())
+    freq = pd.Series(words).value_counts()
+    return freq.head(top_n).index.tolist()
+
+def missing_keywords(resume_text, jd_text):
+    """Find which JD keywords are missing in resume."""
+    jd_keywords = set(extract_keywords(jd_text, top_n=30))
+    resume_keywords = set(extract_keywords(resume_text, top_n=30))
+    missing = jd_keywords - resume_keywords
+    return list(missing)
+
+def generate_pdf_report(score, missing, suggestions):
+    """Generate a simple PDF report with FPDF."""
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_auto_page_break(auto=True, margin=12)
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, txt="AI Resume Analyzer Report", ln=True, align="C")
+    pdf.ln(10)
+    pdf.cell(200, 10, txt=f"Match Score: {score:.2%}", ln=True)
 
-    # --- Header ---
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(0, 10, name, ln=True, align="C")
-    pdf.set_font("Arial", "", 11)
-    pdf.cell(0, 8, email, ln=True, align="C")
-    pdf.ln(5)
+    pdf.ln(10)
+    pdf.multi_cell(0, 10, txt="Missing Keywords: " + ", ".join(missing))
 
-    # --- Summary ---
-    pdf.set_font("Arial", "B", 13)
-    pdf.cell(0, 8, "Summary", ln=True)
-    pdf.set_font("Arial", "", 11)
-    # I had to switch to multi_cell or else long lines ran off the page.
-    pdf.multi_cell(0, 6, summary)
-    pdf.ln(4)
-
-    # --- Skills ---
-    pdf.set_font("Arial", "B", 13)
-    pdf.cell(0, 8, "Skills", ln=True)
-    pdf.set_font("Arial", "", 11)
-    pdf.multi_cell(0, 6, skills)
-    pdf.ln(4)
-
-    # --- Experience ---
-    pdf.set_font("Arial", "B", 13)
-    pdf.cell(0, 8, "Experience", ln=True)
-
-    for job in jobs:
-        pdf.set_font("Arial", "B", 11)
-        # NOTE: I used em dash here for style (—)
-        pdf.cell(0, 6, f"{job['role']} — {job['company']} ({job['dates']})", ln=True)
-        pdf.set_font("Arial", "", 11)
-        for bullet in job["bullets"]:
-            # Using multi_cell again for safety (bullets can be long)
-            pdf.multi_cell(0, 6, f"- {bullet}")
-        pdf.ln(1)
+    pdf.ln(10)
+    pdf.multi_cell(0, 10, txt="Suggestions:\n- " + "\n- ".join(suggestions))
 
     return pdf.output(dest="S").encode("latin1")
 
-# --- Button actions ---
-if st.button("Generate PDF"):
-    if not name or not email:
-        # A resume without name/email doesn’t make sense
-        st.error("Name and Email are required!")
+# --- Streamlit App ---
+st.set_page_config(page_title="AI Resume Analyzer", page_icon="📝", layout="wide")
+st.title("📝 AI Resume Analyzer")
+st.write("Upload your resume and paste a job description to see how well they match.")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    resume_file = st.file_uploader("Upload Resume", type=["pdf", "docx", "txt"])
+with col2:
+    jd_text = st.text_area("Paste Job Description")
+
+if resume_file and jd_text:
+    resume_text = extract_text(resume_file)
+    resume_clean = clean_text(resume_text)
+    jd_clean = clean_text(jd_text)
+
+    # Compute similarity score
+    score, vocab = compute_similarity(resume_clean, jd_clean)
+
+    st.subheader("📊 Match Score")
+    st.metric(label="Resume vs JD", value=f"{score:.2%}")
+
+    # Missing keywords
+    missing = missing_keywords(resume_clean, jd_clean)
+    st.subheader("❌ Missing Keywords")
+    if missing:
+        st.write(", ".join(missing))
     else:
-        jobs = parse_experience(experience)
-        pdf_bytes = generate_pdf(name, email, summary, skills, jobs)
-        # This lets me download the file straight from browser
-        st.download_button("Download Resume PDF", pdf_bytes, file_name="resume.pdf", mime="application/pdf")
-        st.success("PDF generated successfully ✔")
+        st.write("No major missing keywords found 🎉")
+
+    # Suggestions
+    suggestions = []
+    if score < 0.6:
+        suggestions.append("Add more relevant keywords from the job description.")
+    if len(missing) > 0:
+        suggestions.append("Incorporate missing skills naturally in your resume.")
+    if not suggestions:
+        suggestions.append("Your resume is already a strong match!")
+
+    st.subheader("💡 Suggestions")
+    for s in suggestions:
+        st.write("- " + s)
+
+    # Downloadable report
+    pdf = generate_pdf_report(score, missing, suggestions)
+    st.download_button("⬇️ Download Report", pdf, "resume_report.pdf", "application/pdf")
+else:
+    st.info("👉 Upload a resume and paste a job description to get started.")
 
