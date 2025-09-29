@@ -1,111 +1,125 @@
-# app.py
-import io
-import pathlib
+"""
+Resume Builder (my version)
+
+Why I built it:
+---------------
+I was tired of messing around with Word/Google Docs for resumes,
+so I thought it'd be cool to just enter data and get a PDF out.
+Also gave me an excuse to practice Streamlit + PDF generation.
+
+Notes & Struggles:
+------------------
+- My first try used `cell` instead of `multi_cell` → text was overflowing off the page.
+- I forgot to add page breaks and the PDF looked broken.
+- Spacing/alignment was a nightmare at first; fixed by using consistent fonts/sizes.
+- TODO: Add multiple template designs (modern vs simple).
+- TODO: Add job description keyword highlighting (to match ATS systems).
+"""
+
 import streamlit as st
-import pandas as pd
-from src.text_utils import load_text_from_any
-from src.analyzer import analyze_resume_vs_jd, build_report_markdown
-from src.skills_catalog import ALL_SKILLS_CANONICAL
+from fpdf import FPDF
 
-st.set_page_config(page_title="AI Resume Analyzer", page_icon="🧠", layout="wide")
+st.set_page_config(page_title="Resume Builder", page_icon="📄", layout="centered")
+st.title("📄 Resume Builder")
 
-st.title("🧠 AI Resume Analyzer")
-st.write("Evaluate how well a resume matches a job description. Get a match score, skills coverage, and actionable suggestions.")
+# --- Input fields ---
+# I kept the form minimal for now (name, email, summary, skills, experience).
+# In the future I might split sections with tabs, but this works.
+name = st.text_input("Full Name")
+email = st.text_input("Email")
+summary = st.text_area("Summary / About Me", height=120, placeholder="Write a short intro here...")
 
-with st.expander("How it works", expanded=False):
-    st.markdown("""
-    - Upload your **resume** (PDF/DOCX/TXT).  
-    - Paste or upload a **job description**.  
-    - The app extracts skills, computes TF‑IDF similarity, and shows what's missing.  
-    - Download a **Markdown report** you can keep or attach to applications.
-    """)
+# I almost used a multiselect for skills, but text input is faster.
+skills = st.text_area("Skills (comma separated)", placeholder="Python, SQL, Streamlit, Pandas")
 
-colA, colB = st.columns(2, gap="large")
+# Experience format is a bit strict → Company | Role | Dates | Bullets
+# I considered a dynamic form with add buttons, but too complex for now.
+experience = st.text_area(
+    "Job Experience (one per line, format: Company | Role | Start-End | Bullet1; Bullet2)",
+    height=160
+)
 
-with colA:
-    st.subheader("1) Resume")
-    resume_file = st.file_uploader("Upload resume (.pdf, .docx, .txt)", type=["pdf", "docx", "txt"])
-    resume_text = ""
-    if resume_file is not None:
-        resume_text = load_text_from_any(resume_file, resume_file.name)
+def parse_experience(text):
+    """
+    Parse the raw job text input into a structured list.
+    Example input line:
+        Acme Corp | Data Intern | Jun 2024 - Aug 2024 | cleaned data; built dashboard
+    """
+    jobs = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            # Splitting with maxsplit=3 → ensures bullets all stay in the last part.
+            company, role, dates, bullets = [x.strip() for x in line.split("|", maxsplit=3)]
+            jobs.append({
+                "company": company,
+                "role": role,
+                "dates": dates,
+                # Bullets are split by ";" → easy to type multiple ones
+                "bullets": [b.strip() for b in bullets.split(";") if b.strip()]
+            })
+        except ValueError:
+            # If the user types in wrong format, skip it but warn them.
+            st.warning(f"Skipping badly formatted line: {line}")
+    return jobs
 
-    sample_resume = st.checkbox("Use sample resume", value=False)
-    if sample_resume:
-        from pathlib import Path
-        sample_path = Path("data/sample_resume.txt")
-        resume_text = sample_path.read_text(encoding="utf-8")
+def generate_pdf(name, email, summary, skills, jobs):
+    """
+    Build the actual PDF with fpdf.
+    I experimented with different fonts and sizes until things looked decent.
+    """
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=12)
 
-    st.text_area("Resume text (preview / editable)", value=resume_text, height=260, key="resume_text_area")
+    # --- Header ---
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(0, 10, name, ln=True, align="C")
+    pdf.set_font("Arial", "", 11)
+    pdf.cell(0, 8, email, ln=True, align="C")
+    pdf.ln(5)
 
-with colB:
-    st.subheader("2) Job Description")
-    jd_source = st.radio("Provide JD as:", ["Paste text", "Upload file (.txt)"], horizontal=True)
-    jd_text = ""
-    if jd_source == "Paste text":
-        jd_text = st.text_area("Paste job description here", height=260, key="jd_text_area")
+    # --- Summary ---
+    pdf.set_font("Arial", "B", 13)
+    pdf.cell(0, 8, "Summary", ln=True)
+    pdf.set_font("Arial", "", 11)
+    # I had to switch to multi_cell or else long lines ran off the page.
+    pdf.multi_cell(0, 6, summary)
+    pdf.ln(4)
+
+    # --- Skills ---
+    pdf.set_font("Arial", "B", 13)
+    pdf.cell(0, 8, "Skills", ln=True)
+    pdf.set_font("Arial", "", 11)
+    pdf.multi_cell(0, 6, skills)
+    pdf.ln(4)
+
+    # --- Experience ---
+    pdf.set_font("Arial", "B", 13)
+    pdf.cell(0, 8, "Experience", ln=True)
+
+    for job in jobs:
+        pdf.set_font("Arial", "B", 11)
+        # NOTE: I used em dash here for style (—)
+        pdf.cell(0, 6, f"{job['role']} — {job['company']} ({job['dates']})", ln=True)
+        pdf.set_font("Arial", "", 11)
+        for bullet in job["bullets"]:
+            # Using multi_cell again for safety (bullets can be long)
+            pdf.multi_cell(0, 6, f"- {bullet}")
+        pdf.ln(1)
+
+    return pdf.output(dest="S").encode("latin1")
+
+# --- Button actions ---
+if st.button("Generate PDF"):
+    if not name or not email:
+        # A resume without name/email doesn’t make sense
+        st.error("Name and Email are required!")
     else:
-        jd_file = st.file_uploader("Upload JD (.txt)", type=["txt"], key="jd_file")
-        if jd_file is not None:
-            jd_text = jd_file.read().decode("utf-8", errors="ignore")
-    sample_jd = st.checkbox("Use sample JD", value=False, key="use_sample_jd")
-    if sample_jd:
-        from pathlib import Path
-        jd_text = Path("data/sample_job_description.txt").read_text(encoding="utf-8")
+        jobs = parse_experience(experience)
+        pdf_bytes = generate_pdf(name, email, summary, skills, jobs)
+        # This lets me download the file straight from browser
+        st.download_button("Download Resume PDF", pdf_bytes, file_name="resume.pdf", mime="application/pdf")
+        st.success("PDF generated successfully ✔")
 
-run_btn = st.button("🔍 Analyze", type="primary", use_container_width=True)
-
-if run_btn:
-    resume_text_final = st.session_state.get("resume_text_area", "").strip()
-    jd_text_final = st.session_state.get("jd_text_area", "").strip() if jd_source == "Paste text" else jd_text.strip()
-    if not resume_text_final or not jd_text_final:
-        st.error("Please provide both resume and job description.")
-        st.stop()
-
-    with st.spinner("Analyzing..."):
-        result = analyze_resume_vs_jd(resume_text_final, jd_text_final)
-
-    st.success("Analysis complete!")
-
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Overall Match Score (0‑100)", f"{result['overall_score']:.1f}")
-    c2.metric("TF‑IDF Similarity (0‑100)", f"{result['similarity_score']*100:.1f}")
-    c3.metric("Skills Coverage (0‑100)", f"{result['skills_coverage']*100:.1f}")
-
-    st.divider()
-
-    st.subheader("Skills Overview")
-    left, right = st.columns(2)
-    with left:
-        st.markdown("**Skills found in Resume**")
-        st.write(", ".join(sorted(result["resume_skills"])) if result["resume_skills"] else "_None detected_")
-    with right:
-        st.markdown("**Skills expected from JD**")
-        st.write(", ".join(sorted(result["jd_skills"])) if result["jd_skills"] else "_None detected_")
-
-    st.markdown("**Missing (prioritized):** " + (", ".join(result["missing_skills"]) if result["missing_skills"] else "_No major gaps_"))
-
-    st.subheader("Keyword Gaps (beyond skills)")
-    if result["missing_keywords"]:
-        df_kw = pd.DataFrame({"Missing Keyword": result["missing_keywords"]})
-        st.dataframe(df_kw, use_container_width=True, hide_index=True)
-    else:
-        st.write("_No obvious keyword gaps._")
-
-    st.subheader("Suggestions")
-    for tip in result["suggestions"][:8]:
-        st.markdown(f"- {tip}")
-
-    st.subheader("Download Report")
-    report_md = build_report_markdown(result, top_n_suggestions=8)
-    st.download_button(
-        label="⬇️ Download Markdown report",
-        data=report_md.encode("utf-8"),
-        file_name="resume_analysis_report.md",
-        mime="text/markdown",
-        use_container_width=True,
-    )
-
-    with st.expander("Debug / Raw Output"):
-        st.json({k: v for k, v in result.items() if k not in ("resume_text", "jd_text")})
-
-st.caption("Pro tip: Include this project link on LinkedIn and your resume.")
